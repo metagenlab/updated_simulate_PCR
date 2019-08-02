@@ -1,0 +1,761 @@
+#!/usr/bin/perl
+#v1.2
+
+# Shea Gardner, LLNL, January 29, 2014
+#Unclassified/Open Source Distribution
+
+#LLNL-CODE-642995
+#Title: Simulate PCR, Version: 1.0
+#Author(s) Shea Gardner
+
+#OCEC-13-214
+
+#THE BSD OPENSOURCE LICENSE
+#Copyright (c) 2013, Lawrence Livermore National Security, LLC.
+#Produced at the Lawrence Livermore National Laboratory
+#Written by Shea Gardner gardner26 (at) llnl.gov
+#LLNL-CODE-642995
+#All rights reserved.
+#This file is part of Simulate PCR. For details, see https://sourceforge.net/projects/simulatepcr. Please also read this link  Additional BSD Notice.
+#Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+# Redistributions of source code must retain the above copyright notice, this list of conditions and the disclaimer below.
+# Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the disclaimer (as noted below) in the documentation and/or other materials provided with the distribution.
+# Neither the name of the LLNS/LLNL nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+#THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL LAWRENCE LIVERMORE NATIONAL SECURITY, LLC, THE U.S. DEPARTMENT OF ENERGY OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING
+#IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF
+#THE POSSIBILITY OF SUCH DAMAGE.
+#Additional BSD Notice
+#1. This notice is required to be provided under our contract with the U.S.
+#Department of Energy (DOE). This work was produced at Lawrence Livermore
+#National Laboratory under Contract No. DE-AC52-07NA27344 with the DOE.
+#2. Neither the United States Government nor Lawrence Livermore National
+#Security, LLC nor any of their employees, makes any warranty, express or
+#implied, or assumes any liability or responsibility for the accuracy,
+#completeness, or usefulness of any information, apparatus, product, or process
+#disclosed, or represents that its use would not infringe privately-owned rights.
+#3. Also, reference herein to any specific commercial products, process, or
+#services by trade name, trademark, manufacturer or otherwise does not
+#necessarily constitute or imply its endorsement, recommendation, or favoring by
+#the United States Government or Lawrence Livermore National Security, LLC.
+#The views and opinions of authors expressed herein do not necessarily state or
+#reflect those of the United States Government or Lawrence Livermore National
+#Security, LLC, and shall not be used for advertising or product endorsement
+#purposes.
+
+use strict;
+use LWP::Simple;
+use Getopt::Long; 
+use Bio::SeqIO;
+no warnings 'deprecated';
+ 
+
+if(scalar @ARGV < 2)
+{
+        die "\nUsage: $0 -db <sequence_database> -primers <primer_probe.fasta> -minlen <min_amplicon_len> -maxlen  <max_amplicon_len> -mm <num_mm_allowed> -mux <0|1> -num_threads <#cpu> -max_target_seqs <max#_blast_matches_to_keep_per_query> -word_size <blast_word_size> -evalue <evalue> -extract_amp <0|1> -3prime <perfect_match_length_at3'end_of_primer>
+        \nCommand line options are:
+        -db       can be fasta file or blastdb of sequences to search
+        -primers  fasta file with primers. If paired primers, they must have fasta deflines >idx|F and >idx|R using same idx. If mux, then defline can be anything. If there are probes, deflines must end with |IO, e.g. >probeName|IO.
+        -minlen   minimum amplicon length, default 40
+        -maxlen   maximum amplicon length, default 1000
+        -mm       number mismatches of primer to target, including indels, and still allow priming. Does not count degenerate bases in mismatch count. default 3
+        -mux      0 (paired, i.e. single plex simple rxns with F, R, IO interacting exactly as specified) or 1 (multiplex, complex primer pairings allowed), default 1
+        -num_threads  number of threads (CPUs) to use in the BLAST search, default 1
+        -max_target_seqs  Maximum number of aligned sequences to keep in the BLAST search, this is the value of blastn -max_target_seqs. default 1000
+        -evalue   evalue of BLAST search, default 1000
+        -word_size word size to use in blast search, default 4
+        -genes    0 (do not find gene annotation of hits) or 1 (do find gene annotation of hits), default 0
+        -extract_amp 1 (extract amplicon sequences) or 0 (do not extract amplicon sequences), default 0
+        -3prime the number of bases at the 3' end of the primer that must match the database sequence in order for a hit, default 3
+        \n
+        Given a file of seqs or a blastdb and a file of primers,
+        find the amplicons produced either from specified primer pairings or complex multiplex pairings.
+
+      \nExample: simulate_PCR -db /usr/mic/bio/blastdb/kpath/all_flatfiles -primers primer.fasta -minlen 80 -maxlen 620 -mm 2 -mux 1 -num_threads  12 -max_target_seqs 10000 -genes 1 -word_size 4 -evalue 1000  -extract_amp 1 -3prime 2
+        \n\n";
+}
+
+my $fasta_file ;
+my $primer_probe_file ;
+my $min_legal_amplicon_length = 40; # default
+my $max_legal_amplicon_length = 1000; # default
+my $mm_allowed = 3; # default
+my $paired;
+my $mux = 1; # default
+my $num_cpu = 1;  # default
+my $annotate = 0; # default
+my $max_target_seqs=1000; # default
+my $word_size=4; # default
+my $organism="";
+my $evalue=1000; # default
+my $extract_amplicon=0; # default
+my $min3primeMatch=3; # default
+
+GetOptions ( "db:s" =>\$fasta_file,
+	     "primers:s" =>\$primer_probe_file,
+	     "minlen:i" =>\$min_legal_amplicon_length,
+	     "maxlen:i" =>\$max_legal_amplicon_length,
+	     "mm:i" => \$mm_allowed,
+	     "mux:i" => \$mux,
+	     "num_threads:i" => \$num_cpu,
+	     "genes:i" => \$annotate,
+	     "max_target_seqs:i" => \$max_target_seqs,
+	     "word_size:i" => \$word_size,
+	     "evalue:f" => \$evalue,
+	     "extract_amp:i" => \$extract_amplicon,
+	     "3prime:i" => \$min3primeMatch
+    );
+                             
+
+if ($mux > 0) {
+    $paired=0;
+} else {
+    $paired=1;
+}
+
+my @date = `date`;
+chomp(@date);
+my @pwd = `pwd`;
+chomp(@pwd);
+print "Executed as \"$0 -db $fasta_file -primers $primer_probe_file -minlen $min_legal_amplicon_length -maxlen $max_legal_amplicon_length -mm $mm_allowed -mux $mux -num_threads $num_cpu -max_target_seqs $max_target_seqs -word_size $word_size -evalue $evalue -genes $annotate -extract_amp $extract_amplicon -3prime $min3primeMatch \" on $ENV{HOST} in @pwd  @date\n";
+
+
+my %primer_hash;
+my %rev_comp_primer_hash;
+my $num_primers = 0;
+my %seqNums=();
+my %primer_seqid=();
+my %Fullid=();
+my %found_one=();
+my %ids_with_one_primer_match=();
+my %probe=();
+my %gi_target_list=();
+my %detected=();
+my %subject_length_hash=();
+my $target_fasta_from_ncbi ;
+my %fvals;
+my %rvals;
+my %fvals_primer_seq=();
+my %rvals_primer_seq=();
+my %fvals_primer_id=();
+my %rvals_primer_id=();
+my %fvals_primer_mm=();
+my %rvals_primer_mm=();
+my %pvals=();
+my %pvals_seq=();
+my %pvals_mm=();
+my %pvals_id=();
+my %pvals_strand=();
+
+################
+
+#print "fasta_file=  $fasta_file\n";
+my $db=`basename $fasta_file`;
+chomp $db;
+print "db basename=$db\n";
+my $outprefix=`basename $primer_probe_file`;
+chomp $outprefix;
+print "outprefix $outprefix\n";
+if ($mux == 1) {
+    $outprefix .=".mux.".$db;
+} else {
+    $outprefix .=".pair.".$db;
+}
+
+&read_in_primers; # hashes primers & their rc 
+
+
+my $bo=$outprefix.".blastout";
+my $amplicon_file = $outprefix.".amplicons";
+my $amplicon_distribution_file =  $outprefix.".amplicon_distribution";
+my $amplicon_not_found_file =  $outprefix.".one_primer_but_no_amp";
+my $amplicon_fasta = $outprefix.".amplicons.fasta";
+my $detection_count_file= $outprefix.".detection_counts_by_triplet";
+
+## Run on input fasta db, probably nt or all_flatfiles
+open AMPLICON_NOT_FOUND,">$amplicon_not_found_file";
+open AMPLICON_FILE, ">$amplicon_file" or die "Cannot open $amplicon_file: $!\n";
+open FASTA,">$amplicon_fasta" or die "Cannot open $amplicon_fasta: $!\n";
+open OUTDATA, ">$amplicon_distribution_file" or die "Cannot open $amplicon_distribution_file: $!\n";
+
+# check for hits against nt
+my $blastout=&blast_primers($fasta_file,$bo);
+print "Reading blastout and creating data structures.\n";
+&read_blastout($blastout);
+my @sseqid_array_nt=sort keys %{$ids_with_one_primer_match{$blastout}}; 
+print "Scanning hits for pairs and triplets.\n";
+&scan_hits(@sseqid_array_nt);
+
+close AMPLICON_NOT_FOUND;
+close AMPLICON_FILE;
+close FASTA;
+close OUTDATA;
+
+  
+
+print "\nNumber Detected: ",scalar keys %found_one,"\n";
+print "\nDetected:\n";
+if (scalar keys %found_one < 1) {
+    print "None\n";
+} else {
+    foreach my $sseqid ( sort keys %found_one) {
+	if ($found_one{$sseqid} == 1) {
+	    print  "$sseqid $Fullid{$sseqid}\n";
+	}
+    }
+}
+
+
+foreach (my $mm=0 ; $mm <= $mm_allowed; $mm++) {
+    my $file=$detection_count_file.".$mm"."mismatches";
+    open TRIPLET,">$file"  or die "Cannot open $file: $!\n";
+    print TRIPLET "#TargetsHit\tFP_ID\tRP_ID\tProbeID\n";
+    my $cmd= "awk -F'\\011' -v m=$mm '\$3 != \"FP_ID\" && \$6<=m  && \$10<=m   &&  ( \$16<=m  || \$16 eq \"N/A\" )  {print  \$3 \"\\t\" \$7 \"\\t\" \$12  \"\\t\" \$21} ' $amplicon_file    | sort -u | awk -F'\\011'  '{print \"\\t\" \$1 \"\\t\" \$2 \"\\t\" \$3}' | sort | uniq -c | sort -nr";
+    my $result=`$cmd`;
+    #print $result;
+    print TRIPLET "$result";
+    close TRIPLET;
+}
+
+
+
+sub read_in_primers {
+    open PRIMERS,"$primer_probe_file" or die "Cannot open $primer_probe_file: $!\n";
+    my $id="";
+    my $seq="";
+    my $num_probes=0;
+   while (my $line = <PRIMERS>) {
+      chomp $line;
+      $line =~ s/\s+//; #  in case there are invisible tabs
+      if ($line =~ />(.*)/) {
+	  $id=$1;
+      } elsif ($line =~ /\w+/) { 
+	  $seq=uc $line;
+
+	  if ($id =~ /\|IO$/) {
+	    $probe{$id}=$seq;
+	    $num_probes++;
+	  }
+	  if ($id !~ /\|IO$/) {
+	      $num_primers++;
+	      $primer_hash{$seq} = 1;
+	      $primer_seqid{$id}=$seq;
+	      my $rev_comp_primer = revcomp($seq);
+	      $rev_comp_primer_hash{$rev_comp_primer} = 1;
+	  }
+	  print "$id\t$seq\n";
+      }
+   }
+    close PRIMERS or warn  "Cannot close $primer_probe_file: $!\n";
+    print "Read in $num_primers primers and $num_probes probes.\n";
+
+}
+
+sub blast_primers {
+    my ($fasta_file,$out)=@_;
+    chomp $fasta_file;
+    print "fasta_file=  $fasta_file\n";
+    my $tmp=$fasta_file.".nin";
+    my $tmp2=$fasta_file.".00.nin";
+    my $tmp3=$ENV{'BLASTDB'}."/".$fasta_file.".nin";
+    my $tmp4=$ENV{'BLASTDB'}."/".$fasta_file.".00.nin";
+
+
+    print "blastout: $out\n";
+    if ( (!-e $tmp  || -z $tmp ) && (!-e $tmp2  || -z $tmp2 )  && (!-e $tmp3  || -z $tmp3 ) && (!-e $tmp4  || -z $tmp4 ) ) {
+	print "making blastdb for $fasta_file\n";
+	`makeblastdb -in $fasta_file -dbtype nucl > /dev/null `;
+    }
+
+    if (!-e $out ) {
+	print "Running blastn\n";
+	my $blastcmd="blastn -num_threads $num_cpu  -db '$fasta_file' -query $primer_probe_file -task blastn-short -dust no  -evalue $evalue  -penalty -1  -max_target_seqs $max_target_seqs -word_size $word_size -out $out -outfmt '6 qseqid sseqid nident qstart qend sstart send sseq slen stitle'";
+	print "$blastcmd\n";
+	system($blastcmd);
+	print "Finished Running blastn\n";
+    } else {
+	print "Using previously computed $out\n";
+    }
+
+    if ($db eq "nt") {
+	print "$db is nt\n";
+	if (!-e $tmp2 && !-e $tmp4) {
+	    print "Cannot find nt.\n";
+	    exit;
+	}
+	#  don't need to run blastdbcmd -entry all for nt since blastdbcmd recognizes the sseqid's returned from blast
+    } else {
+	#  DO need to run blastdbcmd -entry all since blastdbcmd DOES NOT recognize the sseqid's returned from blast
+	# It only recognizes "1" 
+	my $dbheaders=$db.".headers";
+	if (!-s $dbheaders) {
+	    # If the file already exists, use it, otherwise create new one, but it could take awhile.
+	    my $blastcmd="blastdbcmd -db $fasta_file  -entry all -outfmt '%o %t' > $db.headers ";
+	    print "$blastcmd\n";
+	    system($blastcmd);
+	}
+	open H,"$db.headers";
+
+          #  1 gi|24251234|gb|AY157498.1| Synechococ
+
+ 	while (my $line=<H>) {
+	    if ($line =~ /^(\S+)\s(\S+)\s+(.*)/) {
+		my $db_seqnum=$1;
+		my $seqid=$2;
+		my $fullid=$2." ".$3;
+		chomp($fullid);
+		$seqNums{$seqid}=$db_seqnum;
+		$Fullid{$seqid}=$fullid;
+	    }
+	}
+	
+	close H;
+    }
+    return $out;
+}
+ 
+sub read_blastout {
+    my $blastout=shift;
+    open IN,"$blastout";
+    my @blastresults=<IN>;
+    close IN;
+    foreach my $result (@blastresults) {
+	chomp $result;
+	#print "$result\n";
+	my ( $qseqid, $sseqid, $nident, $qstart, $qend, $sstart,$send,$sseq, $slen,$fullid) = split /\t/,$result;
+	chomp($qseqid, $sseqid, $nident, $qstart, $qend, $sstart,$send,$sseq, $slen,$fullid);
+	$Fullid{$sseqid}=$fullid;
+	$subject_length_hash{$sseqid}=$slen;
+	if ($qseqid !~ /\|IO/ ) {
+	    my $primer_seq=$primer_seqid{$qseqid}; 
+	    #print "\$primer_seq: $primer_seq\n";
+	    my $num_degen= $primer_seq =~ s/([^ATCGatcg])/$1/g;
+	    #print "\$num_degen=$num_degen\n";
+	    #print "\$primer_seq: $primer_seq\n";
+	    my $primer_len=length($primer_seq);
+	    #print "\$primer_len=$primer_len\n";
+
+	    if ($nident >= $primer_len - $num_degen - $mm_allowed || ($min3primeMatch < 2  && $nident+1 >= $primer_len - $num_degen - $mm_allowed ) ) {   # acceptable number of mismatches, but we need to account for corner case where BLAST fails to report last matching base after an intervening mismatch
+		# Now chech the positions relative to the 3' end
+		my $threePrimeEndPrimer="x";
+		my $threePrimeEndTarget="x";
+		my $mm_count_at3prime_end=$primer_len-$qend ;
+		#print "\$min3primeMatch=$min3primeMatch\n";
+		#print "\$mm_count_at3prime_end=$mm_count_at3prime_end\n";
+		my $prime3OK=0;
+	
+		if ($min3primeMatch==0) { # you don't care about mismatches at end of primer
+		    $prime3OK=1;
+		}
+		if ($min3primeMatch > 0 && $mm_count_at3prime_end == 0 ) { # blast match extends to end of primer
+		    $threePrimeEndPrimer=substr($primer_seq,-$min3primeMatch);  # check for mismatches at 3' end of primer to target
+		    $threePrimeEndTarget=substr($sseq,-$min3primeMatch);     
+		    if ( $threePrimeEndPrimer eq $threePrimeEndTarget) {
+			$prime3OK=1;
+		    }
+		} elsif ($min3primeMatch >= 2  && $mm_count_at3prime_end>0 ) {  # blast match ends before end of primer, not OK
+		    $prime3OK=0;
+		} elsif ($min3primeMatch < 2 && $mm_count_at3prime_end>0 ) {  # blast match ends before end of primer, not OK, but need to check the corner case where the BLAST failed to find the last match base after an intervening mismatch.
+		    if ($send - $sstart > 0 ) { # plus strand hit
+			#print "start,stop ",$send+1," ",$send+$mm_count_at3prime_end,"\n";
+			my $tail=&extract_amplicons($sseqid,$send+1,$send+$mm_count_at3prime_end);
+			#print "tail: $tail\n";
+			
+			$threePrimeEndPrimer=substr($primer_seq,-1);  # check for mismatches at 3' end of primer to target
+			$threePrimeEndTarget=substr($tail,-1);
+			
+			#print "\$threePrimeEndPrimer=$threePrimeEndPrimer\n\$threePrimeEndTarget=$threePrimeEndTarget\n";
+			if ( $threePrimeEndPrimer eq $threePrimeEndTarget) {
+			    $prime3OK=1;
+			    $nident++; # there's on last matching base at end of primer after reported BLAST match
+			} 
+		    }  elsif ($send - $sstart < 0 ) { # minus strand hit
+			#print "start,stop ",$send-1," ",$send-$mm_count_at3prime_end,"\n";
+			my $tail=revcomp(&extract_amplicons($sseqid,$send-$mm_count_at3prime_end,$send-1));
+			#print "revcomp match\n";
+			#print "tail: $tail\n";
+			$threePrimeEndPrimer=substr($primer_seq,-1);  # check for mismatches at 3' end of primer to target
+			$threePrimeEndTarget=substr($tail,-1);     
+			#print "\$threePrimeEndPrimer=$threePrimeEndPrimer\n\$threePrimeEndTarget=$threePrimeEndTarget\n";
+			if ( $threePrimeEndPrimer eq $threePrimeEndTarget) {
+			    $prime3OK=1;
+			    $nident++;  # there's on last matching base at end of primer after reported BLAST match
+			} 
+		    }
+		}
+		
+		# print "\$threePrimeEndPrimer=$threePrimeEndPrimer\n\$threePrimeEndTarget=$threePrimeEndTarget\n";
+		
+		if ( $nident >= $primer_len - $num_degen - $mm_allowed && $prime3OK == 1  ) {  # 3 prime bases are OK and the adjusted number of matching bases is acceptable
+		    my $mm=$primer_len-$nident - $num_degen ;
+		    #print "\$mm=$mm\n";
+		    $ids_with_one_primer_match{$blastout}{$sseqid}=1;
+		    if ($send - $sstart < 0 ) { # minus strand hit
+			# find positions of primer binding to fwd strand by matching primers with minus strand match
+			push @{$fvals{$sseqid}},$sstart;
+			push @{$fvals_primer_seq{$sseqid}},$primer_seq;
+			push @{$fvals_primer_id{$sseqid}},$qseqid;
+			push @{$fvals_primer_mm{$sseqid}},$mm;
+			#print "$qseqid\t$primer_seq\t$sseqid\t$sstart\n";
+		    } elsif ($send - $sstart > 0 ) { # plus strand hit
+			# find positions of primer binding to rev strand by matching primers with plus strand match
+			push @{$rvals{$sseqid}},$sstart;
+			push @{$rvals_primer_seq{$sseqid}},$primer_seq;
+			push @{$rvals_primer_id{$sseqid}},$qseqid;
+			push @{$rvals_primer_mm{$sseqid}},$mm;
+			#print "$qseqid\t$primer_seq\t$sseqid\t$sstart\n";
+		    }
+		} # if ( $prime3OK == 1  ) { 
+	    } ###### if ($nident >= $primer_len - $num_degen - $mm_allowed ) {   # acceptable number of mismatches
+	    
+
+	} else { #  ($qseqid !~ /\|IO/ ) {
+	    my $probe_seq=$probe{$qseqid}; 
+	    my $num_degen= $probe_seq =~ s/([^ATCGatcg])/$1/g;
+	    my $probe_len=length($probe_seq);
+	    if ($nident >= $probe_len - $num_degen - $mm_allowed) {
+		my $mm=$probe_len-$nident - $num_degen ;
+		my $probe_start=min($sstart,$send);
+		# find positions of primer binding to fwd strand by matching primers with minus strand match
+		push @{$pvals{$sseqid}},$probe_start;
+		push @{$pvals_seq{$sseqid}},$probe_seq;
+		push @{$pvals_id{$sseqid}},$qseqid;
+		push @{$pvals_mm{$sseqid}},$mm;
+		if ($send - $sstart < 0 ) { # minus strand hit
+		    push @{$pvals_strand{$sseqid}},"Minus";
+		} else { # plus strand hit
+		    push @{$pvals_strand{$sseqid}},"Plus";
+		}
+		
+	    } #   if ($nident >= $probe_len - $num_degen - $mm_allowed) {
+	} # else 	} else { #  ($qseqid !~ /\|IO/ ) {
+    } # foreach my $result (@blastresults) {
+}
+
+
+sub scan_hits {
+    my @sseqid_array=@_;
+    my %amp_dist_hash=();
+    my %triplet=();
+
+    print AMPLICON_FILE "amplicon_len\tHitName\tFP_ID\tFP_seq\tFP_degeneracies\tFP_mismatches\tRP_ID\tRP_seq\tRP_degeneracies\tRP_mismatches\tRevcompRP\tProbeID\tProbe_seq\tRevcompProbe\tProbe_degeneracies\tProbe_mismatches\tProbe_startOnAmplicon\tProbeStrand\tStart\tEnd\tFull_Hit_ID\tSubjectFullLength\tAmpliconSeq\tPrimary_tag\tGene\tProduct\tProtein_id\tNote\n";
+        
+    foreach my $sseqid (@sseqid_array ) { 
+	$Fullid{$sseqid} =~ s/\s+$//;
+	$Fullid{$sseqid} =~ s/[\n\t\r]//g;
+	#print "$sseqid\n";
+	my $alen;
+	my @amp_dist=();
+	#$found_one{$sseqid}=0;
+	
+	my $ridx=0;
+	foreach my $rval (@{$rvals{$sseqid}}) {
+	    my $fidx = 0;
+	    foreach my $fval (@{$fvals{$sseqid}}) {
+		if ($fval > $rval) {
+		    my $fpid_prefix=${$rvals_primer_id{$sseqid}}[$ridx];
+		    my $rpid_prefix=${$fvals_primer_id{$sseqid}}[$fidx];
+		    $fpid_prefix=~ s/(.*)\|(F|R)/$1/;
+		    $rpid_prefix=~ s/(.*)\|(F|R)/$1/;
+
+		    if ( $paired==0 || ($paired==1 && $fpid_prefix eq $rpid_prefix )  ) {
+			#print "$paired\t$fpid_prefix\t$rpid_prefix\n";			
+			$alen = $fval - $rval + 1;
+			
+			if ($alen >= $min_legal_amplicon_length && $alen <= $max_legal_amplicon_length) {
+			    
+			    $found_one{$sseqid} = 1;
+			    
+			    push(@amp_dist,$alen);
+			    my $rc=revcomp(${$fvals_primer_seq{$sseqid}}[$fidx]);
+			    
+			    my $FP_seq=${$rvals_primer_seq{$sseqid}}[$ridx];
+			    my $RP_seq=${$fvals_primer_seq{$sseqid}}[$fidx];
+			    my $FP_degen= $FP_seq =~ s/([^ATCGatcg])/$1/g;
+			    my $RP_degen= $RP_seq =~ s/([^ATCGatcg])/$1/g;
+			    if ($FP_degen !~ /\d/) { $FP_degen=0;}
+			    if ($RP_degen !~ /\d/) { $RP_degen=0;}
+			    
+			    
+			    my $amp="N/A";		
+			    if ($extract_amplicon ==1) {
+				print "Extracting amplicon\n";
+				$amp=&extract_amplicons($sseqid,$rval,$fval);
+				print FASTA ">$sseqid ${$rvals_primer_id{$sseqid}}[$ridx] ${$fvals_primer_id{$sseqid}}[$fidx]\n$amp\n";
+			    }
+			    
+			    my ($primary_tag,$protein_id,$product,$gene,$note)=("N/A","N/A","N/A","N/A","N/A");
+			    if ($annotate == 1) {
+				print "Annotating hit\n"; 
+				($primary_tag,$protein_id,$product,$gene,$note)=&get_annotation($sseqid,$rval,$fval);
+			    }  
+			    
+			    # Check for probe matches, set to N/A if none
+			    
+			    my %probe_strand=();
+			    my %probe_start=();
+			    my %mm_probe=();
+			    my %probe_seq=();
+			    my %probe_degen=();
+			    my %revcomp_probe=();
+			    my %probeid=();
+			    $probe_strand{0}="N/A";
+			    $probe_start{0}="N/A";
+			    $mm_probe{0}="N/A";
+			    $probe_seq{0}="N/A";
+			    $probe_degen{0}="N/A";
+			    $revcomp_probe{0}="N/A";
+			    $probeid{0}="N/A";
+			    my $pidx = 0;
+			    
+			    foreach my $pval (@{$pvals{$sseqid}} ) {
+				my $probe_prefix=${$pvals_id{$sseqid}}[$pidx];
+				$probe_prefix =~ s/(.*)\|IO/$1/;
+				#print "$fpid_prefix\t$probe_prefix\n";
+				#sleep 1;
+				if ( $paired==0 || ($paired==1 && $fpid_prefix eq $probe_prefix )  ) {
+				    if ($pval > $rval+length($FP_seq) && $pval + length($probe_seq{$pidx}) < $fval - length($RP_seq) ) { # probe is between primers
+					$probe_seq{$pidx}=${$pvals_seq{$sseqid}}[$pidx];
+					$probe_degen{$pidx}= $probe_seq{$pidx} =~ s/([^ATCGatcg])/$1/g;
+					if ($probe_degen{$pidx} !~ /\d/ && $probe_degen{$pidx} !~ /N\/A/) { $probe_degen{$pidx}=0;}
+					$revcomp_probe{$pidx}=revcomp($probe_seq{$pidx});
+					
+					$probe_strand{$pidx}=${$pvals_strand{$sseqid}}[$pidx];
+					$probe_start{$pidx}=${$pvals{$sseqid}}[$pidx] - ${$rvals{$sseqid}}[$ridx];   # $pval-$rval+1;
+					$mm_probe{$pidx}=${$pvals_mm{$sseqid}}[$pidx];
+					$probeid{$pidx}=${$pvals_id{$sseqid}}[$pidx];
+				    }
+				}
+				$pidx++;
+			    }
+			    
+			    
+			    foreach my $pidx ( sort {$a <=> $b} keys %probe_strand ) {
+				
+				print AMPLICON_FILE "$alen\t$sseqid\t${$rvals_primer_id{$sseqid}}[$ridx]\t${$rvals_primer_seq{$sseqid}}[$ridx]\t$FP_degen\t${$rvals_primer_mm{$sseqid}}[$ridx]\t${$fvals_primer_id{$sseqid}}[$fidx]\t${$fvals_primer_seq{$sseqid}}[$fidx]\t$RP_degen\t${$fvals_primer_mm{$sseqid}}[$fidx]\t$rc\t$probeid{$pidx}\t$probe_seq{$pidx}\t$revcomp_probe{$pidx}\t$probe_degen{$pidx}\t$mm_probe{$pidx}\t$probe_start{$pidx}\t$probe_strand{$pidx}\t$rval\t$fval\t$Fullid{$sseqid}\t$subject_length_hash{$sseqid}\t$amp\t$primary_tag\t$gene\t$product\t$protein_id\t$note\n"; 
+			    } 
+			    
+			} # if ($alen >= $min_legal_amplicon_length && $alen <= $max_legal_amplicon_length) {
+		    }  # 	if ( $paired==0 || ($paired==1 && $fpid_prefix == $rpid_prefix )  ) {
+		} # if ($fval > $rval) {
+		$fidx++;
+	    } # foreach my $fval (@{$fvals{$sseqid}}) {
+	    $ridx++;
+	} # foreach my $rval (@{$rvals{$sseqid}}) {
+	
+	
+	if ( $found_one{$sseqid} == 0) {
+	    print AMPLICON_NOT_FOUND "$sseqid Length=$subject_length_hash{$sseqid} $Fullid{$sseqid}\n";
+	} 
+	
+	if ( $found_one{$sseqid} == 1) {
+	    my $amp_string="";
+	    my %amp_hash=();
+	    foreach my $len (@amp_dist){
+		$amp_hash{$len}=1;
+	    }
+	    $amp_string =join(",",(sort by_number keys %amp_hash) );
+	    
+	    push(@{$amp_dist_hash{$amp_string}},$sseqid);
+	}
+	
+	
+    } # foreach my $sseqid (sort keys %fvals) {
+    
+    
+    #find min, max, and mean number of fragments (bands)
+    my $min_num_frags=10000;
+    my $max_num_frags=-10;
+    my $mean_num_frags;
+    foreach my $amp_string (sort by_number keys %amp_dist_hash) {
+	my $num_frags = $amp_string =~ tr/,/,/;
+	if ($num_frags > 0) { $num_frags++;}
+	if ($amp_string =~ /\d/ && $amp_string !~ /,/) { $num_frags = 1;} # corrects for case of only 1 frag
+	#if ($amp_string eq "") { $num_frags = 0;}
+	
+	if ($num_frags < $min_num_frags) {
+	    $min_num_frags=$num_frags;
+	}
+	if ($num_frags > $max_num_frags) {
+	    $max_num_frags = $num_frags;
+	}
+	$mean_num_frags += $num_frags;
+    }
+    if (scalar(keys %amp_dist_hash)>0) {
+	$mean_num_frags =  $mean_num_frags/scalar(keys %amp_dist_hash);
+    } else {
+	$mean_num_frags =0;
+    }
+    if ($min_num_frags==10000) {$min_num_frags=0;}
+    if ($max_num_frags==-10) {$max_num_frags=0;}
+    
+    print OUTDATA "mean number bands: $mean_num_frags\n";
+    print OUTDATA "min number bands: $min_num_frags\n";
+    print OUTDATA "max number bands: $max_num_frags\n\n";
+    
+    foreach my $amp_string (sort by_number keys %amp_dist_hash) {
+	print OUTDATA "amp string: $amp_string\n";
+	foreach my $sseqid (@{$amp_dist_hash{$amp_string}} ) {
+	    print OUTDATA "ID: $sseqid $Fullid{$sseqid}\n";
+	}
+	print OUTDATA "\n";
+    }
+    
+} # end sub scan_hits
+
+
+
+sub extract_amplicons {
+    my ($sseqid,$rval,$fval) = @_;
+    my $seqNum=$seqNums{$sseqid};
+    my $amp="";
+    if ($db eq "nt") {
+	my $fullid="";
+	my $amp_return=`blastdbcmd  -db "$fasta_file" -dbtype nucl  -outfmt '%s *@*@ %t' -entry \"$sseqid\" -range $rval-$fval `;
+	($amp,$fullid)=split/\s\*\@\*\@\s/,$amp_return;  # try to use something no one should ever use in a fasta defline
+	chomp $fullid;
+	$Fullid{$sseqid}=$sseqid." ".$fullid;
+	if ($amp =~ /([ATCGN]*)\s([ATCGN]*)/) {
+	    my $possible_amp_repeat1=$1;
+	    my $possible_amp_repeat2=$2;
+	    if (length($possible_amp_repeat1) == length($possible_amp_repeat2) && length($possible_amp_repeat1)==$fval-$rval+1 ) { # probabaly a bad entry, repeated sequence return.
+		$amp=$possible_amp_repeat1;
+	    }
+	}
+    } else { # not nt
+	my $entryNum="gnl|BL_ORD_ID|".$seqNum;
+	$amp=`blastdbcmd  -db "$fasta_file" -dbtype nucl  -outfmt '%s' -entry \"$entryNum\" -range $rval-$fval `;
+    }
+    chomp $amp;
+    $amp =~ s/\s+//g;
+    if ($amp =~ /(\w+)\s+(\w+)/ ) { $amp =$1;} # blastdbcmd returns repeat sometimes. bug?
+    $amp =~ s/[\n\t\r]//g;
+    return $amp;
+} # end sub
+				    
+
+sub get_annotation  {
+    my ($sseqid,$rval,$fval)=@_;
+    
+    my %primary_tag_hash=();
+    my %gene_hash=();
+    my %product_hash=();
+    my %note_hash=();
+    my %protein_id_hash=();
+    
+    my ($info,$product,$gi,$gene,$note,$protein_id,$primary_tag);
+    if ($Fullid{$sseqid} =~ /gi\|(\d+)\|/) {
+	my $gi=$1;
+	$info=
+	    get("http://www.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=nucleotide&id=$gi&&rettype=gbwithparts&seq_start=$rval&seq_stop=$fval&retmode=text");
+	if ($info =~ /\w+/ ) {
+	    my $stringfh;
+	    open($stringfh,"<",\$info);
+	    my $seqio_object=Bio::SeqIO->new(-fh=> $stringfh,-format=> "genbank");
+	    
+	    while ( my $seq_object = $seqio_object->next_seq() ) {
+		for my $feat_object ($seq_object->get_SeqFeatures) {
+		    $primary_tag = $feat_object->primary_tag ;
+		    if ($primary_tag ne "source") {
+			$primary_tag_hash{$primary_tag}++;
+		    }
+		    for my $tag ($feat_object->get_all_tags) {
+			my @values=$feat_object->get_tag_values($tag);
+			chomp @values;
+			if ($tag =~ /product/) {
+			    $product=join("::: ",@values);
+			    $product_hash{$product}++;  # hashing to eliminate duplicates
+			}
+			if ($tag =~ /gene/) {
+			    $gene =join("::: ",@values);
+			    $gene_hash{$gene}++;
+			}
+			if ($tag =~ /note/) {
+			    $note = join("::: ",@values);
+			    $note_hash{$note}++;
+			}
+			if ($tag =~ /protein_id/) {
+			    $protein_id = join("::: ",@values);
+			    $protein_id_hash{$protein_id}++;
+							    }
+		    }
+		    
+		}
+	    }
+	    $primary_tag = join(":::",sort { $primary_tag_hash{$a} <=> $primary_tag_hash{$b} } keys %primary_tag_hash); # sorts in the order reported and joins mulitple annotations into one column
+	    
+	    $product=join(":::",sort { $product_hash{$a} <=> $product_hash{$b} } keys %product_hash);
+	    $gene=join(":::",sort { $gene_hash{$a} <=> $gene_hash{$b} } keys %gene_hash);
+	    $note=join(":::",sort { $note_hash{$a} <=> $note_hash{$b} } keys %note_hash);
+	    $protein_id=join(":::",sort { $protein_id_hash{$a} <=> $protein_id_hash{$b} } keys %protein_id_hash);
+	    
+	    $product=~ s/^\:\:\: //;
+	    $gene=~ s/^\:\:\: //;
+	    $note=~ s/^\:\:\: //;
+	    $protein_id=~ s/^\:\:\: //;
+	    if ($product eq "") {$product="N/A";}  # stick an N/A in there
+	    if ($gene eq "") {$gene="N/A";}
+	    if ($note eq "") {$note="N/A";}
+	    if ($protein_id eq "") {$protein_id="N/A";}
+	    if ($primary_tag eq "") {$primary_tag="N/A";}
+	    # print "Primary_tag: $primary_tag\n";
+	    # print "PRODUCT: $product\n";
+	    # print "GENE: $gene\n";
+	    # print "NOTE: $note\n";
+	    # print "PROTEIN_ID: $protein_id\n";
+	}
+    }
+    return ($primary_tag,$protein_id,$product,$gene,$note);
+} # end sub get_annotation
+
+
+sub print_not_detected {
+###### Print the gi's under the specified taxonomy node that were not detected by each signature
+    if ($organism ne "" ) {
+	my $not_detected=$outprefix.".not_detected";
+	open NOT_DETECTED,">$not_detected";
+	foreach my $fpID (sort keys %detected) {
+	    foreach my $rpID (sort keys %{$detected{$fpID}}) {
+		foreach my $prID (sort keys %{$detected{$fpID}{$rpID}}) {
+		    print NOT_DETECTED "\n"; 
+		    foreach my $target_gi (sort keys %gi_target_list) {
+			if (!defined $detected{$fpID}{$rpID}{$prID}{$target_gi}) {
+			    print NOT_DETECTED "$fpID\t$rpID\t$prID\t$target_gi\t$gi_target_list{$target_gi}\n";
+			}
+		    }
+		}
+	    }
+	}
+	close NOT_DETECTED;
+    }
+}
+
+
+sub by_number {
+    if ($a < $b) {
+	return -1;
+    } elsif ($a == $b) {
+	return 0;
+    } elsif ($a > $b) {
+	return 1;
+    }
+}
+
+
+sub revcomp {
+    my ($s) = @_;
+    $s =~ tr/wsatugcyrkmbdhvnATUGCYRKMBDHVN/WSTAACGRYMKVHDBNTAACGRYMKVHDBN/;
+    $s = reverse $s;
+    return $s;
+}
+
+sub min {
+   my ($a,$b);
+   ($a,$b)=@_;
+   if ($a <= $b) {
+       return $a;
+   } else {
+       return $b;
+   }
+}
+
+1;
