@@ -23,9 +23,9 @@ tar -xvzf simulate_PCR-v1.2.tar.gz
 #Make sure it is executable:
 chmod +x simulate_PCR
 
-# Run it without options to see what the options are
+## Run it without options to see what the options are
 simulate_PCR
-# or you might need to precede by perl
+## or you might need to precede by perl
 perl simulate_PCR 
 
 This is a perl script. You must install the following bioperl libraries where they will be found in @INC, so put them where your PERL5LIB environment variable points:
