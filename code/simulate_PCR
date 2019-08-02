@@ -263,7 +263,7 @@ sub blast_primers {
     print "blastout: $out\n";
     if ( (!-e $tmp  || -z $tmp ) && (!-e $tmp2  || -z $tmp2 )  && (!-e $tmp3  || -z $tmp3 ) && (!-e $tmp4  || -z $tmp4 ) ) {
 	print "making blastdb for $fasta_file\n";
-	`makeblastdb -in $fasta_file -dbtype nucl > /dev/null `;
+	`makeblastdb -parse_seqids -in $fasta_file -dbtype nucl > /dev/null `;
     }
 
     if (!-e $out ) {
@@ -623,7 +623,7 @@ sub extract_amplicons {
 	}
     } else { # not nt
 	my $entryNum="gnl|BL_ORD_ID|".$seqNum;
-	$amp=`blastdbcmd  -db "$fasta_file" -dbtype nucl  -outfmt '%s' -entry \"$entryNum\" -range $rval-$fval `;
+	$amp=`blastdbcmd  -db "$fasta_file" -dbtype nucl  -outfmt '%s' -entry \"$sseqid\" -range $rval-$fval `;
     }
     chomp $amp;
     $amp =~ s/\s+//g;
