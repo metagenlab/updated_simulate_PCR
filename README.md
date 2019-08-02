@@ -1,5 +1,5 @@
 # updated_simulate_PCR
-Corrected version of simulate_PCR (https://doi.org/10.1186/1471-2105-15-237)
+Corrected version of simulate_PCR (https://doi.org/10.1186/1471-2105-15-237). Now works when there is only one sequence in queried database. Tested with blast v2.9.0 
 
 # Authors' original description
 
